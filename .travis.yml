@@ -1,0 +1,55 @@
+language: go
+matrix:
+  include:
+  - go: 1.x
+  - go: 1.11.x
+  - go: 1.12.x
+    env:
+    - LATEST=true
+    - GO111MODULE=on
+  - go: tip
+  allow_failures:
+  - go: tip
+env:
+- GO111MODULE=on
+before_install:
+- go get github.com/mitchellh/gox
+install: true
+script:
+- go mod tidy
+- go mod vendor
+- go test -mod=vendor ./... --race
+- if [ "${LATEST}" = "true" ]; then gox -mod=vendor -output="mysql-monitor-${TRAVIS_BRANCH}-{{.OS}}-{{.Arch}}"
+  -ldflags "-X main.Commit=`git rev-parse --short HEAD` -X main.Version=${TRAVIS_BRANCH}"
+  -verbose github.com/messagebird/mysql-monitor/cmd; fi
+- if [ "${LATEST}" = "true" ]; then ls -l mysql-monitor-${TRAVIS_BRANCH}-* | awk '{printf "%s\n",
+  $9}' | while read line; do tar cfJ $line.tar.xz $line; done; fi
+deploy:
+  skip_cleanup: true
+  provider: releases
+  api_key:
+    secure: cR46TePDc+4BHoMRaapWkvC+WC1q3acq+DHsC26wvWOmr+Anf1p8CRtWMj/HvuP450Qkk3w/EIdvC6iPT47yUpUYiJiXaYScM2qScW/ZVPcuOLEgaL4O3kSmG36iENNXV+OwTAuqwUtoNcJtOALwt/OH2Xkqc03MUI1N99H485QORguc0IolQ5M0XYB37ULia0+wcHyo6O0rNeDN4Rycf2Cdd2faRiaNSFUaYUupye1RKmOtFRnqwxYoA98paKU7PpOuo3XzEwMp+yAXqgu1Z7V0X0KB3fskzCAJylZA6IBXzMdVmWdtd9+rrUbC2yScVk1jGFqw90Knw1i2LmnX1WIPDpxiBJYO/Akfni4A51R3hyNfwcyLfd5QNH4AcHoH6B8mUrsFDg58vM1PaAJfOcDGS9b5QfvswI4f9rvmxAi3buZHzaiWbDFOvMt+YdJru2UWjADqr8mv78X+r+TVbHhHdLg/QwDXsScn7aCPx39QPpr5qPm6PKvIJk+gcWT1G6/KzizoRj/doLjZg0UZi3WIdkqX44IrthyaFACSLswE2itbs1tTgrANCt8OaeGciMR6GJ7xFREKm1CStlLO1jjbBO9UpJ/LMFa4Q7HPXzwBSbr63gfSdIsCzmLNI7/z2fv5Wf5L783WXY+E+sSSWMU41l35rTOdIkLZpUSJb7c=
+  file:
+  - mysql-monitor-${TRAVIS_BRANCH}-darwin-386.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-darwin-amd64.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-freebsd-386.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-freebsd-amd64.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-freebsd-arm.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-linux-386.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-linux-amd64.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-linux-arm.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-linux-mips.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-linux-mips64.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-linux-mips64le.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-linux-mipsle.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-linux-s390x.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-netbsd-386.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-netbsd-amd64.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-netbsd-arm.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-openbsd-386.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-openbsd-amd64.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-windows-386.exe.tar.xz
+  - mysql-monitor-${TRAVIS_BRANCH}-windows-amd64.exe.tar.xz
+  on:
+    tags: true
+    condition: $LATEST = true

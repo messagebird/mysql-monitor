@@ -1,0 +1,9 @@
+output
+*.cnf
+.idea
+tmp
+main
+mysql-monitor-*
+
+*.sh
+vendor

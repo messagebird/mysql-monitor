@@ -1,0 +1,365 @@
+definitions:
+  data.Cycle:
+    properties:
+      cycle:
+        type: integer
+      id:
+        type: string
+      ran_at:
+        type: string
+      took:
+        type: string
+    type: object
+  data.MysqlProcessList:
+    properties:
+      command:
+        type: string
+      db:
+        type: string
+      host:
+        type: string
+      id:
+        type: integer
+      info:
+        type: string
+      rows_examined:
+        type: integer
+      rows_sent:
+        type: integer
+      state:
+        type: string
+      time:
+        type: integer
+      user:
+        type: string
+    type: object
+  data.SlaveStatus:
+    properties:
+      auto_position:
+        type: integer
+      channel_name:
+        type: string
+      connect_retry:
+        type: string
+      exec_master_log_pos:
+        type: integer
+      executed_gtid_set:
+        type: string
+      last_errno:
+        type: integer
+      last_error:
+        type: string
+      last_io_errno:
+        type: integer
+      last_io_error:
+        type: string
+      last_io_error_timestamp:
+        type: string
+      last_sql_errno:
+        type: integer
+      last_sql_error:
+        type: string
+      last_sql_error_timestamp:
+        type: string
+      master_bind:
+        type: string
+      master_host:
+        type: string
+      master_info_file:
+        type: string
+      master_log_file:
+        type: string
+      master_port:
+        type: string
+      master_retry_count:
+        type: integer
+      master_server_id:
+        type: integer
+      master_ssl_allowed:
+        type: string
+      master_ssl_ca_file:
+        type: string
+      master_ssl_ca_path:
+        type: string
+      master_ssl_cert:
+        type: string
+      master_ssl_cipher:
+        type: string
+      master_ssl_crl:
+        type: string
+      master_ssl_crlpath:
+        type: string
+      master_ssl_key:
+        type: string
+      master_ssl_verify_server_cert:
+        type: string
+      master_tls_version:
+        type: string
+      master_user:
+        type: string
+      master_uuid:
+        type: string
+      read_master_log_pos:
+        type: integer
+      relay_log_file:
+        type: string
+      relay_log_pos:
+        type: integer
+      relay_log_space:
+        type: integer
+      relay_master_log_file:
+        type: string
+      replicate_do_db:
+        type: string
+      replicate_do_table:
+        type: string
+      replicate_ignore_db:
+        type: string
+      replicate_ignore_server_ids:
+        type: integer
+      replicate_ignore_table:
+        type: string
+      replicate_rewrite_db:
+        type: string
+      replicate_wild_do_table:
+        type: string
+      replicate_wild_ignore_table:
+        type: string
+      retrieved_gtid_set:
+        type: string
+      seconds_behind_master:
+        type: integer
+      skip_counter:
+        type: integer
+      slave_io_running:
+        type: string
+      slave_io_state:
+        type: string
+      slave_io_status:
+        type: string
+      slave_sql_running:
+        type: string
+      slave_sql_running_state:
+        type: string
+      slave_status:
+        type: string
+      sql_delay:
+        type: integer
+      sql_remaining_delay:
+        type: string
+      until_condition:
+        type: string
+      until_log_file:
+        type: string
+      until_log_pos:
+        type: integer
+    type: object
+  data.Thread:
+    properties:
+      connection_type:
+        type: integer
+      history:
+        type: string
+      instrumented:
+        type: string
+      name:
+        type: string
+      parent_thread_id:
+        type: integer
+      process_list_command:
+        type: string
+      process_list_db:
+        type: string
+      process_list_host:
+        type: string
+      process_list_id:
+        type: integer
+      process_list_info:
+        type: string
+      process_list_state:
+        type: string
+      process_list_time:
+        type: string
+      process_list_user:
+        type: string
+      role:
+        type: string
+      thread_id:
+        type: integer
+      thread_os_id:
+        type: integer
+      type:
+        type: string
+    type: object
+  data.Top:
+    properties:
+      text:
+        type: string
+    type: object
+  data.UnixProcessList:
+    properties:
+      text:
+        type: string
+    type: object
+info:
+  contact: {}
+  license: {}
+paths:
+  /cycles:
+    get:
+      consumes:
+      - application/json
+      description: Get all cycles that are available
+      operationId: get-all-cycles
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/data.Cycle'
+            type: object
+      summary: Get all cycles
+      tags:
+      - mysql
+  /cycles/{cycle_id}/mysql/engine-innodb-status:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of mysql engine innoDB statuses belonging to a cycle
+        id.
+      operationId: get-all-mysql-engine-innodb
+      parameters:
+      - description: Cycle ID
+        in: path
+        name: cycle_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/data.SlaveStatus'
+            type: object
+      summary: Get all mysql engine InnoDB status by cycle id
+      tags:
+      - mysql
+  /cycles/{cycle_id}/mysql/processlist:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of mysql processlist belonging to a cycle id.
+      operationId: get-all-mysql-process-list
+      parameters:
+      - description: Cycle ID
+        in: path
+        name: cycle_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/data.MysqlProcessList'
+            type: object
+      summary: Get all mysql processlist by cycle id
+      tags:
+      - mysql
+  /cycles/{cycle_id}/mysql/slave-status:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of mysql slave status belonging to a cycle id.
+      operationId: get-all-mysql-slave-status
+      parameters:
+      - description: Cycle ID
+        in: path
+        name: cycle_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/data.SlaveStatus'
+            type: object
+      summary: Get all mysql slave statuses by cycle id
+      tags:
+      - mysql
+  /cycles/{cycle_id}/mysql/threads:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of mysql threads belonging to a cycle id.
+      operationId: get-all-mysql-threads
+      parameters:
+      - description: Cycle ID
+        in: path1
+        name: cycle_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/data.Thread'
+            type: object
+      summary: Get all mysql threads by cycle id
+      tags:
+      - mysql
+  /cycles/{cycle_id}/system/process-list:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of system processlist belonging to a cycle id, this
+        is always 1 entry.
+      operationId: get-all-system-process-list
+      parameters:
+      - description: Cycle ID
+        in: path
+        name: cycle_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/data.UnixProcessList'
+            type: object
+      summary: Get all system processlist by cycle id, this is always 1 entry
+      tags:
+      - system
+  /cycles/{cycle_id}/system/top:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of system top belonging to a cycle id, this is always
+        1 entry.
+      operationId: get-all-system-top
+      parameters:
+      - description: Cycle ID
+        in: path
+        name: cycle_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/data.Top'
+            type: object
+      summary: Get all system top by cycle id, this is always 1 entry
+      tags:
+      - system

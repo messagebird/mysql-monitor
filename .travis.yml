@@ -21,7 +21,7 @@ script:
 - go test -mod=vendor ./... --race
 - if [ "${LATEST}" = "true" ]; then gox -mod=vendor -output="mysql-monitor-${TRAVIS_BRANCH}-{{.OS}}-{{.Arch}}"
   -ldflags "-X main.Commit=`git rev-parse --short HEAD` -X main.Version=${TRAVIS_BRANCH}"
-  -verbose github.com/messagebird/mysql-monitor/cmd; fi
+  -verbose github.com/messagebird/mysql-monitor; fi
 - if [ "${LATEST}" = "true" ]; then ls -l mysql-monitor-${TRAVIS_BRANCH}-* | awk '{printf "%s\n",
   $9}' | while read line; do tar cfJ $line.tar.xz $line; done; fi
 deploy:

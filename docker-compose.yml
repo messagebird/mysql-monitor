@@ -8,12 +8,12 @@ services:
       - MYSQL_ROOT_PASSWORD=root
     ports:
       - 3301:3306
-  monitor:
-    image: golang
-    ports:
-      - 9090:9090
-      - 6060:6060
-    volumes:
-      - ./:/project
-    working_dir: /project
-    command: 'go run cmd/main.go --trace --level debug m -c dev-docker.cnf -n 1s -o tmp/no-sql/ -r 1h --not-in-sqlite'
+#  monitor:
+#    image: golang
+#    ports:
+#      - 9090:9090
+#      - 6060:6060
+#    volumes:
+#      - ./:/project
+#    working_dir: /project
+#    command: 'go run cmd/main.go --trace --level debug m -c dev-docker.cnf -n 1s -o tmp/no-sql/ -r 1h --not-in-sqlite'

@@ -1,16 +1,16 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"github.com/go-ini/ini"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"github.com/messagebird/mysql-monitor/internal/data"
 	"github.com/messagebird/mysql-monitor/internal/logging"
-	"strings"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"text/template"
 	"time"
 )
@@ -18,17 +18,17 @@ import (
 // GetDB returns the database connection that we want to monitor.
 // Please make sure that the DB_* environment variables are set.
 func GetDB(cnfPath string) (*sqlx.DB, error) {
-	user, pass, socket, host, err := getCredFromCnf(cnfPath)
+	dbCred, err := getCredFromCnf(cnfPath)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not get mysql credentials from cnf file")
 	}
 
 	var db *sqlx.DB
 
-	if socket == "" {
-		db, err = sqlx.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:3306)/", user, pass, host))
+	if dbCred.socket == "" {
+		db, err = sqlx.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/", dbCred.user, dbCred.password, dbCred.host, dbCred.port))
 	} else {
-		db, err = sqlx.Open("mysql", fmt.Sprintf("%s:%s@unix(%s)/", user, pass, socket))
+		db, err = sqlx.Open("mysql", fmt.Sprintf("%s:%s@unix(%s)/", dbCred.user, dbCred.password, dbCred.socket))
 	}
 
 	if err != nil {
@@ -49,33 +49,39 @@ func GetDB(cnfPath string) (*sqlx.DB, error) {
 	return db, nil
 }
 
-func getCredFromCnf(path string) (string, string, string, string, error) {
+type dbCred struct {
+	user, password, socket, host, port string
+}
+
+func getCredFromCnf(path string) (dbCred, error) {
 	logging.Trace(logging.TraceTypeEntering)
 	defer logging.Trace(logging.TraceTypeExiting)
 	cnf, err := ini.Load(path)
 	if err != nil {
-		return "", "", "", "", errors.Wrap(err, "could not load mysql cnf file")
+		return dbCred{}, errors.Wrap(err, "could not load mysql cnf file")
 	}
 
-	user := cnf.Section("client").Key("user").String()
-	password := cnf.Section("client").Key("password").String()
-	socket := cnf.Section("client").Key("socket").String()
-	host := cnf.Section("client").Key("host").String()
+	cred := dbCred{}
 
-	if user == "" || password == "" {
-		logrus.Fatal("user or password is an empty string")
+	cred.user = cnf.Section("client").Key("user").String()
+	cred.password = cnf.Section("client").Key("password").String()
+	cred.socket = cnf.Section("client").Key("socket").String()
+	cred.host = cnf.Section("client").Key("host").String()
+	cred.port = cnf.Section("client").Key("port").String()
+
+	if cred.user == "" || cred.password == "" {
+		logrus.Fatal("cred.user or password is an empty string")
 	}
 
-	if host == "" {
-		host = "127.0.0.1"
+	if cred.host == "" {
+		cred.host = "127.0.0.1"
 	}
 
-	user = strings.Trim(user, " ")
-	password = strings.Trim(password, " ")
-	socket = strings.Trim(socket, " ")
-	host = strings.Trim(host, " ")
+	if cred.port == "" {
+		cred.port = "3306"
+	}
 
-	return user, password, socket, host, nil
+	return cred, nil
 }
 
 type ProcessList struct {
@@ -92,11 +98,8 @@ type ProcessList struct {
 }
 
 // GetProcessList returns a channel of entries pulled from the process list of the passed db.
-func GetProcessList(db *sqlx.DB) (chan *data.MonitoredData, error) {
-	logging.Trace(logging.TraceTypeEntering)
-	defer logging.Trace(logging.TraceTypeExiting)
-
-	rows, err := db.Queryx(`select id, user, host, db, command, time, state, info from information_schema.PROCESSLIST;`)
+func GetProcessList(ctx context.Context, db *sqlx.DB) (chan *data.MonitoredData, error) {
+	rows, err := db.QueryxContext(ctx, `select id, user, host, db, command, time, state, info from information_schema.PROCESSLIST;`)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not query db to get process list")
 	}
@@ -129,13 +132,10 @@ func GetProcessList(db *sqlx.DB) (chan *data.MonitoredData, error) {
 }
 
 // GetEngineINNODBStatus returns the status of engine INNODB
-func GetEngineINNODBStatus(db *sqlx.DB) (chan *data.MonitoredData, error) {
-	logging.Trace(logging.TraceTypeEntering)
-	defer logging.Trace(logging.TraceTypeExiting)
-
+func GetEngineINNODBStatus(ctx context.Context, db *sqlx.DB) (chan *data.MonitoredData, error) {
 	ch := make(chan *data.MonitoredData)
 
-	rows, err := db.Query(`SHOW ENGINE INNODB STATUS;`)
+	rows, err := db.QueryxContext(ctx, `SHOW ENGINE INNODB STATUS;`)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not get engine innodb status")
 	}
@@ -166,9 +166,6 @@ func GetEngineINNODBStatus(db *sqlx.DB) (chan *data.MonitoredData, error) {
 
 // GetEngineINNODBStatusTemplate returns the template that can be used to parse the result of engine innodb as .txt
 func GetEngineINNODBStatusTemplate() (*template.Template, error) {
-	logging.Trace(logging.TraceTypeEntering)
-	defer logging.Trace(logging.TraceTypeExiting)
-
 	t := template.New("Engine innodb status")
 	parsed, err := t.Parse(`
 ======================================================================
@@ -193,11 +190,8 @@ func (s SlaveStatusChan) IsNil() bool {
 }
 
 // GetSlaveStatus executes `show slave status` and returns it parsed in a struct.
-func GetSlaveStatus(db *sqlx.DB) (chan *data.MonitoredData, error) {
-	logging.Trace(logging.TraceTypeEntering)
-	defer logging.Trace(logging.TraceTypeExiting)
-
-	rows, err := db.Queryx(`show slave status`)
+func GetSlaveStatus(ctx context.Context, db *sqlx.DB) (chan *data.MonitoredData, error) {
+	rows, err := db.QueryxContext(ctx, `show slave status`)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not get slave status")
 	}
@@ -234,11 +228,8 @@ func GetSlaveStatus(db *sqlx.DB) (chan *data.MonitoredData, error) {
 }
 
 // GetThreads runs select * from p_s.threads
-func GetThreads(db *sqlx.DB) (chan *data.MonitoredData, error) {
-	logging.Trace(logging.TraceTypeEntering)
-	defer logging.Trace(logging.TraceTypeExiting)
-
-	rows, err := db.Queryx(`
+func GetThreads(ctx context.Context, db *sqlx.DB) (chan *data.MonitoredData, error) {
+	rows, err := db.QueryxContext(ctx,  `
 	select thread_id,
        name,
        type,

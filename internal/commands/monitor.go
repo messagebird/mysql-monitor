@@ -323,14 +323,14 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgrou
 							logrus.WithError(ctx.Err()).Warn("partial data stored, one of the systems that is being logged did not finish. It took longer then %s to fetch the data.", timeout)
 							return
 						case <-mysqlDone:
-							logrus.Info("mysql logs fetched and stored")
+							logrus.Info("mysql logs fetched")
 						case <-systemDone:
-							logrus.Info("system logs fetched and stored")
+							logrus.Info("system logs fetched")
 						case <-allDone:
 							allDoneCount++
 
 							if allDoneCount == 2 {
-								logrus.Info("all logs fetched and stored")
+								logrus.Info("all logs fetched")
 								return
 							}
 						}

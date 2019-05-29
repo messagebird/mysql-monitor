@@ -246,96 +246,10 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgrou
 
 				ctx, _ := context.WithTimeout(ctx, timeout)
 
-				go func() {
-					defer func() { allDone <- true }()
-					defer func() { mysqlDone <- true }()
-					var innerWg sync.WaitGroup
+				go fetchMysql(ctx, cliCtx, monitorDb, &cycle, allDone, mysqlDone, ch)
+				go fetchSystem(cliCtx, &cycle, allDone, systemDone, ch)
 
-					if !cliCtx.Bool("exclude-mysql-process-list") {
-						innerWg.Add(1)
-						go func() {
-							defer innerWg.Done()
-							monitorMysqlProcessList(ctx, monitorDb, &cycle, ch)
-						}()
-					}
-
-					if !cliCtx.Bool("exclude-innodb-status") {
-						innerWg.Add(1)
-						go func() {
-							defer innerWg.Done()
-							monitorEngineINNODB(ctx, monitorDb, &cycle, ch)
-						}()
-					}
-
-					if !cliCtx.Bool("exclude-slave-status") {
-						innerWg.Add(1)
-						go func() {
-							defer innerWg.Done()
-							monitorSlaveStatus(ctx, monitorDb, &cycle, ch)
-						}()
-					}
-
-					if !cliCtx.Bool("exclude-ps-threads") {
-						innerWg.Add(1)
-						go func() {
-							defer innerWg.Done()
-							monitorThreads(ctx, monitorDb, &cycle, ch)
-						}()
-					}
-
-					logrus.Debug("waiting for mysql fetches to finish")
-					innerWg.Wait()
-				}()
-
-				go func() {
-					defer func() { allDone <- true }()
-					defer func() { systemDone <- true }()
-					var innerWg sync.WaitGroup
-
-					if !cliCtx.Bool("exclude-unix-process-list") {
-						innerWg.Add(1)
-						go func() {
-							defer innerWg.Done()
-							monitorUnixProcessList(&cycle, ch)
-						}()
-					}
-
-					if !cliCtx.Bool("exclude-unix-top") {
-						innerWg.Add(1)
-						go func() {
-							defer innerWg.Done()
-							monitorUnixTop(&cycle, ch)
-						}()
-					}
-
-					logrus.Debug("waiting for system fetches to finish")
-					innerWg.Wait()
-				}()
-
-				func() {
-					allDoneCount := 0
-					for {
-						select {
-						case <-ctx.Done():
-							if ctx.Err() == context.Canceled {
-								continue
-							}
-							logrus.WithError(ctx.Err()).Warnf("partial data stored, one of the systems that is being logged did not finish. It took longer then %s to fetch the data.", timeout)
-							return
-						case <-mysqlDone:
-							logrus.Info("mysql logs fetched")
-						case <-systemDone:
-							logrus.Info("system logs fetched")
-						case <-allDone:
-							allDoneCount++
-
-							if allDoneCount == 2 {
-								logrus.Info("all logs fetched")
-								return
-							}
-						}
-					}
-				}()
+				waitForFetchToFinish(ctx, mysqlDone, systemDone, allDone, timeout)
 
 				timeTook := time.Since(start)
 
@@ -351,6 +265,97 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgrou
 			}
 		}
 	})
+}
+
+func fetchMysql(ctx context.Context, cliCtx *cli.Context, monitorDb *sqlx.DB, cycle *data.Cycle, allDone chan bool, mysqlDone chan bool, ch chan data.CycleData) {
+		defer func() { allDone <- true }()
+		defer func() { mysqlDone <- true }()
+		var innerWg sync.WaitGroup
+
+		if !cliCtx.Bool("exclude-mysql-process-list") {
+			innerWg.Add(1)
+			go func() {
+				defer innerWg.Done()
+				monitorMysqlProcessList(ctx, monitorDb, cycle, ch)
+			}()
+		}
+
+		if !cliCtx.Bool("exclude-innodb-status") {
+			innerWg.Add(1)
+			go func() {
+				defer innerWg.Done()
+				monitorEngineINNODB(ctx, monitorDb, cycle, ch)
+			}()
+		}
+
+		if !cliCtx.Bool("exclude-slave-status") {
+			innerWg.Add(1)
+			go func() {
+				defer innerWg.Done()
+				monitorSlaveStatus(ctx, monitorDb, cycle, ch)
+			}()
+		}
+
+		if !cliCtx.Bool("exclude-ps-threads") {
+			innerWg.Add(1)
+			go func() {
+				defer innerWg.Done()
+				monitorThreads(ctx, monitorDb, cycle, ch)
+			}()
+		}
+
+		logrus.Debug("waiting for mysql fetches to finish")
+		innerWg.Wait()
+}
+
+func fetchSystem(cliCtx *cli.Context, cycle *data.Cycle, allDone chan bool, systemDone chan bool, ch chan data.CycleData) {
+	defer func() { allDone <- true }()
+	defer func() { systemDone <- true }()
+	var innerWg sync.WaitGroup
+
+	if !cliCtx.Bool("exclude-unix-process-list") {
+		innerWg.Add(1)
+		go func() {
+			defer innerWg.Done()
+			monitorUnixProcessList(cycle, ch)
+		}()
+	}
+
+	if !cliCtx.Bool("exclude-unix-top") {
+		innerWg.Add(1)
+		go func() {
+			defer innerWg.Done()
+			monitorUnixTop(cycle, ch)
+		}()
+	}
+
+	logrus.Debug("waiting for system fetches to finish")
+	innerWg.Wait()
+}
+
+func waitForFetchToFinish(ctx context.Context, mysqlDone chan bool, systemDone chan bool, allDone chan bool, timeout time.Duration) {
+	allDoneCount := 0
+	for {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.Canceled {
+				continue
+			}
+			logrus.WithError(ctx.Err()).Warnf("partial data stored, one of the systems that is being logged did not finish. It took longer then %s to fetch the data.", timeout)
+			return
+		case <-mysqlDone:
+			logrus.Info("mysql logs fetched")
+		case <-systemDone:
+			logrus.Info("system logs fetched")
+		case <-allDone:
+			allDoneCount++
+
+			if allDoneCount == 2 {
+				logrus.Info("all logs fetched")
+				return
+			}
+		}
+	}
 }
 
 func deleteOldCyclesFromSqlite(retention time.Duration, db *data.DB) {

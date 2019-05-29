@@ -68,4 +68,5 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Fatal(err.Error())
 	}
+	logrus.Info("good bye")
 }

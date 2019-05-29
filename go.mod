@@ -10,11 +10,9 @@ require (
 	github.com/go-openapi/swag v0.19.0 // indirect
 	github.com/go-sql-driver/mysql v1.4.1
 	github.com/jmoiron/sqlx v1.2.0
-	github.com/jroimartin/gocui v0.4.0
 	github.com/mailru/easyjson v0.0.0-20190403194419-1ea4449da983 // indirect
 	github.com/mattn/go-runewidth v0.0.4 // indirect
 	github.com/mattn/go-sqlite3 v1.10.0
-	github.com/nsf/termbox-go v0.0.0-20190121233118-02980233997d // indirect
 	github.com/olekukonko/tablewriter v0.0.1
 	github.com/pkg/errors v0.8.1
 	github.com/pressly/goose v2.6.0+incompatible
@@ -27,6 +25,7 @@ require (
 	github.com/urfave/cli v1.20.0
 	golang.org/x/crypto v0.0.0-20190426145343-a29dc8fdc734 // indirect
 	golang.org/x/net v0.0.0-20190424112056-4829fb13d2c6 // indirect
+	golang.org/x/sync v0.0.0-20190423024810-112230192c58
 	golang.org/x/sys v0.0.0-20190429094411-2cc0cad0ac78 // indirect
 	golang.org/x/text v0.3.2 // indirect
 	golang.org/x/tools v0.0.0-20190428024724-550556f78a90 // indirect

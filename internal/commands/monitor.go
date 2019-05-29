@@ -8,16 +8,17 @@ import (
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
 	"github.com/jmoiron/sqlx"
-	"github.com/pkg/errors"
-	"github.com/satori/go.uuid"
-	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
 	"github.com/messagebird/mysql-monitor/internal/api"
 	"github.com/messagebird/mysql-monitor/internal/data"
 	"github.com/messagebird/mysql-monitor/internal/gzips"
 	"github.com/messagebird/mysql-monitor/internal/logging"
 	"github.com/messagebird/mysql-monitor/internal/mysql"
 	"github.com/messagebird/mysql-monitor/internal/unix"
+	"github.com/pkg/errors"
+	"github.com/satori/go.uuid"
+	"github.com/sirupsen/logrus"
+	"github.com/urfave/cli"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"net/http"
 	"os"
@@ -27,6 +28,8 @@ import (
 	"syscall"
 	"time"
 )
+
+const timeFormat = "2006-01-02T150405Z0700"
 
 func GetMonitorCommandFlags() []cli.Flag {
 	return []cli.Flag{
@@ -86,10 +89,11 @@ func GetMonitorCommandFlags() []cli.Flag {
 }
 
 func Monitor(cliCtx *cli.Context) {
-	logging.Trace(logging.TraceTypeEntering)
-	defer logging.Trace(logging.TraceTypeExiting)
-
 	logrus.Infof("hi, going to run this tool with an interval of %q", cliCtx.Duration("n"))
+
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	defer cancelFunc()
+	g, ctx := errgroup.WithContext(ctx)
 
 	abs, err := filepath.Abs(fmt.Sprintf("%s/mysql-monitor.sqlite", cliCtx.String("o")))
 	if err != nil {
@@ -115,34 +119,23 @@ func Monitor(cliCtx *cli.Context) {
 		defer db.Close()
 	}
 
-	var wg sync.WaitGroup
-
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
-	ctx, cancelFunc := context.WithCancel(context.Background())
-	defer cancelFunc()
-
-	exiting := false
-
-	go func() {
+	g.Go(func() error {
 		<-c
-		exiting = true
 		logrus.Info("exiting....")
 		cancelFunc()
-		wg.Wait()
-		logrus.Info("good bye")
-		os.Exit(0)
-	}()
+		return nil
+	})
 
-	go func() {
+	g.Go(func() error {
 		ticker := time.Tick(time.Minute)
 		for {
 			select {
 			case <-ctx.Done():
-				return
+				return nil
 			case <-ticker:
-				wg.Add(1)
 				logrus.Debug("running log deletion")
 				if cliCtx.Bool("not-in-sqlite") {
 					deleteOldCyclesFromDisk(cliCtx.Duration("r"), cliCtx.String("o"))
@@ -150,61 +143,58 @@ func Monitor(cliCtx *cli.Context) {
 					deleteOldCyclesFromSqlite(cliCtx.Duration("r"), db)
 				}
 				logrus.Debug("finished log deletion")
-				wg.Done()
 			}
 		}
-	}()
+	})
 
 	if cliCtx.Bool("not-in-sqlite") {
-		runMonitor(cliCtx, monitorDb, db, &wg, ctx)
+		runMonitor(cliCtx, monitorDb, db, g, ctx)
 	} else {
-		runMonitorWithViewer(cliCtx, monitorDb, db, &wg, ctx)
+		runMonitorWithViewer(cliCtx, monitorDb, db, g, ctx)
 	}
 
-	if exiting {
-		select {}
+	err = g.Wait()
+	if err != nil {
+		logrus.WithError(err).Fatal("monitor crashed")
 	}
 }
 
-func runMonitorWithViewer(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, wg *sync.WaitGroup, ctx context.Context) {
-	go runMonitor(cliCtx, monitorDb, db, wg, ctx)
+func runMonitorWithViewer(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgroup.Group, ctx context.Context) {
+	runMonitor(cliCtx, monitorDb, db, g, ctx)
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Mount("/api/v1/", api.NewRouter(db))
 
-	err := http.ListenAndServe(fmt.Sprintf("0.0.0.0:%s", cliCtx.String("p")), r)
-	if err != nil {
-		logrus.WithError(err).Fatal("could not start api server")
-	}
-}
+	g.Go(func() error {
+		errCh := make(chan error)
 
-func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, wg *sync.WaitGroup, ctx context.Context) {
-	cycles := 0
+		go func() {
+			errCh <- errors.WithStack(http.ListenAndServe(fmt.Sprintf("0.0.0.0:%s", cliCtx.String("p")), r))
+		}()
 
-	ch := make(chan data.CycleData)
-
-	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				close(ch)
-				wg.Add(1)
-				for e := range ch {
-					logrus.Debugf("got chan for %s", e.Path)
+				return nil
+			case err := <-errCh:
+				return errors.Wrap(err, "http server stopped")
+			}
+		}
+	})
+}
 
-					if cliCtx.Bool("not-in-sqlite") {
-						err := saveCycleToFile(db, cliCtx.String("o"), e.Path, e.Extension, e.Cycle, e.MonitoredData)
-						if err != nil {
-							logrus.WithError(err).Error("could not save cycle to file")
-						}
-					} else {
-						saveCycleToDB(db, e.Cycle, e.MonitoredData)
-					}
-				}
-				wg.Done()
-				return
+func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgroup.Group, ctx context.Context) {
+	cycles := 0
+
+	innerCtx, cancel := context.WithCancel(context.Background())
+	ch := make(chan data.CycleData)
+
+	g.Go(func() error {
+		for {
+			select {
+			case <-innerCtx.Done():
+				return nil
 			case e := <-ch:
-				wg.Add(1)
 				logrus.Debugf("got chan for %s", e.Path)
 
 				if cliCtx.Bool("not-in-sqlite") {
@@ -215,25 +205,30 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, wg *sync.W
 				} else {
 					saveCycleToDB(db, e.Cycle, e.MonitoredData)
 				}
-				wg.Done()
 			}
 		}
-	}()
+	})
 
-	time.Sleep(time.Until(time.Now().Round(cliCtx.Duration("n")).Truncate(time.Millisecond)))
-	ticker := time.Tick(cliCtx.Duration("n"))
+	g.Go(func() error {
+		time.Sleep(time.Until(time.Now().Round(cliCtx.Duration("n")).Truncate(time.Millisecond)))
+		ticker := time.Tick(cliCtx.Duration("n"))
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case start := <-ticker:
-			cycles++
-			wg.Add(1)
-			func() {
-				defer wg.Done()
+		timeout := time.Duration(float64(cliCtx.Duration("n")) * 0.75)
 
-				var innerWg sync.WaitGroup
+		logrus.Infof("will cancel/timeout requests for data if it takes longer then %s to fetch", timeout)
+
+		for {
+			select {
+			case <-ctx.Done():
+				cancel()
+				return nil
+			case start := <-ticker:
+				cycles++
+
+				mysqlDone := make(chan bool, 1)
+				systemDone := make(chan bool, 1)
+				allDone := make(chan bool, 2)
+
 				id := uuid.NewV4()
 				cycle := data.Cycle{ID: id, Cycle: cycles, RanAt: start.Round(cliCtx.Duration("n")).Truncate(time.Millisecond)}
 
@@ -244,71 +239,121 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, wg *sync.W
 					err := db.CycleService.Save(cycle)
 					if err != nil {
 						logrus.WithError(err).Fatal("could not save cycle info")
-						return
+						continue
 					}
 					logrus.Debug("done saving cycle")
 				}
 
-				if !cliCtx.Bool("exclude-mysql-process-list") {
-					innerWg.Add(1)
-					go func() {
-						defer innerWg.Done()
-						monitorMysqlProcessList(monitorDb, &cycle, ch)
-					}()
-				}
+				ctx, _ := context.WithTimeout(ctx, timeout)
 
-				if !cliCtx.Bool("exclude-innodb-status") {
-					innerWg.Add(1)
-					go func() {
-						defer innerWg.Done()
-						monitorEngineINNODB(monitorDb, &cycle, ch)
-					}()
-				}
+				go fetchMysql(ctx, cliCtx, monitorDb, &cycle, allDone, mysqlDone, ch)
+				go fetchSystem(cliCtx, &cycle, allDone, systemDone, ch)
 
-				if !cliCtx.Bool("exclude-slave-status") {
-					innerWg.Add(1)
-					go func() {
-						defer innerWg.Done()
-						monitorSlaveStatus(monitorDb, &cycle, ch)
-					}()
-				}
+				waitForFetchToFinish(ctx, mysqlDone, systemDone, allDone, timeout)
 
-				if !cliCtx.Bool("exclude-ps-threads") {
-					innerWg.Add(1)
-					go func() {
-						defer innerWg.Done()
-						monitorThreads(monitorDb, &cycle, ch)
-					}()
-				}
+				timeTook := time.Since(start)
 
-				if !cliCtx.Bool("exclude-unix-process-list") {
-					innerWg.Add(1)
-					go func() {
-						defer innerWg.Done()
-						monitorUnixProcessList(&cycle, ch)
-					}()
-				}
-
-				if !cliCtx.Bool("exclude-unix-top") {
-					innerWg.Add(1)
-					go func() {
-						defer innerWg.Done()
-						monitorUnixTop(&cycle, ch)
-					}()
-				}
-
-				logrus.Debug("waiting for fetches to finish")
-				innerWg.Wait()
-
-				logrus.Infof("finished cycle %d, took %s", cycles, time.Since(start))
-				cycle.Took = time.Since(start).String()
+				logrus.Infof("cycle %d, timestamp: %s", cycles, cycle.RanAt.Format(timeFormat))
+				logrus.Infof("finished cycle %d, took %s", cycles, timeTook)
+				cycle.Took = timeTook.String()
 				if !cliCtx.Bool("not-in-sqlite") {
 					err := db.CycleService.Update(cycle)
 					if err != nil {
 						logrus.WithError(err).Error("could not update cycle time to run.")
 					}
 				}
+			}
+		}
+	})
+}
+
+func fetchMysql(ctx context.Context, cliCtx *cli.Context, monitorDb *sqlx.DB, cycle *data.Cycle, allDone chan bool, mysqlDone chan bool, ch chan data.CycleData) {
+		defer func() { allDone <- true }()
+		defer func() { mysqlDone <- true }()
+		var innerWg sync.WaitGroup
+
+		if !cliCtx.Bool("exclude-mysql-process-list") {
+			innerWg.Add(1)
+			go func() {
+				defer innerWg.Done()
+				monitorMysqlProcessList(ctx, monitorDb, cycle, ch)
 			}()
+		}
+
+		if !cliCtx.Bool("exclude-innodb-status") {
+			innerWg.Add(1)
+			go func() {
+				defer innerWg.Done()
+				monitorEngineINNODB(ctx, monitorDb, cycle, ch)
+			}()
+		}
+
+		if !cliCtx.Bool("exclude-slave-status") {
+			innerWg.Add(1)
+			go func() {
+				defer innerWg.Done()
+				monitorSlaveStatus(ctx, monitorDb, cycle, ch)
+			}()
+		}
+
+		if !cliCtx.Bool("exclude-ps-threads") {
+			innerWg.Add(1)
+			go func() {
+				defer innerWg.Done()
+				monitorThreads(ctx, monitorDb, cycle, ch)
+			}()
+		}
+
+		logrus.Debug("waiting for mysql fetches to finish")
+		innerWg.Wait()
+}
+
+func fetchSystem(cliCtx *cli.Context, cycle *data.Cycle, allDone chan bool, systemDone chan bool, ch chan data.CycleData) {
+	defer func() { allDone <- true }()
+	defer func() { systemDone <- true }()
+	var innerWg sync.WaitGroup
+
+	if !cliCtx.Bool("exclude-unix-process-list") {
+		innerWg.Add(1)
+		go func() {
+			defer innerWg.Done()
+			monitorUnixProcessList(cycle, ch)
+		}()
+	}
+
+	if !cliCtx.Bool("exclude-unix-top") {
+		innerWg.Add(1)
+		go func() {
+			defer innerWg.Done()
+			monitorUnixTop(cycle, ch)
+		}()
+	}
+
+	logrus.Debug("waiting for system fetches to finish")
+	innerWg.Wait()
+}
+
+func waitForFetchToFinish(ctx context.Context, mysqlDone chan bool, systemDone chan bool, allDone chan bool, timeout time.Duration) {
+	allDoneCount := 0
+	for {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.Canceled {
+				continue
+			}
+			logrus.WithError(ctx.Err()).Warnf("partial data stored, one of the systems that is being logged did not finish. It took longer then %s to fetch the data.", timeout)
+			return
+		case <-mysqlDone:
+			logrus.Info("mysql logs fetched")
+		case <-systemDone:
+			logrus.Info("system logs fetched")
+		case <-allDone:
+			allDoneCount++
+
+			if allDoneCount == 2 {
+				logrus.Info("all logs fetched")
+				return
+			}
 		}
 	}
 }
@@ -380,14 +425,14 @@ func isDirEmpty(name string) (bool, error) {
 	return false, errors.Wrap(err, "could not determine if dir is empty")
 }
 
-func monitorMysqlProcessList(monitoringDb *sqlx.DB, cycle *data.Cycle, ch chan data.CycleData) {
+func monitorMysqlProcessList(ctx context.Context, monitoringDb *sqlx.DB, cycle *data.Cycle, ch chan data.CycleData) {
 	logging.Trace(logging.TraceTypeEntering)
 	defer logging.Trace(logging.TraceTypeExiting)
 
 	logrus.Debug("fetching mysql process list")
 	defer logrus.Debug("finished fetching mysql process list")
 
-	processList, err := mysql.GetProcessList(monitoringDb)
+	processList, err := mysql.GetProcessList(ctx, monitoringDb)
 	if err != nil {
 		logrus.WithError(err).Error("could not get process list")
 		return
@@ -396,11 +441,11 @@ func monitorMysqlProcessList(monitoringDb *sqlx.DB, cycle *data.Cycle, ch chan d
 	ch <- data.CycleData{Cycle: cycle, MonitoredData: processList, Extension: "json", Path: "mysql/process-list"}
 }
 
-func monitorEngineINNODB(monitoringDB *sqlx.DB, cycle *data.Cycle, ch chan data.CycleData) {
+func monitorEngineINNODB(ctx context.Context, monitoringDB *sqlx.DB, cycle *data.Cycle, ch chan data.CycleData) {
 	logrus.Debug("fetching engine innodb")
 	defer logrus.Debug("finished fetching saving innodb")
 
-	innodbStatusChan, err := mysql.GetEngineINNODBStatus(monitoringDB)
+	innodbStatusChan, err := mysql.GetEngineINNODBStatus(ctx, monitoringDB)
 	if err != nil {
 		logrus.WithError(err).Error("could not get innodb engine status")
 		return
@@ -409,11 +454,11 @@ func monitorEngineINNODB(monitoringDB *sqlx.DB, cycle *data.Cycle, ch chan data.
 	ch <- data.CycleData{Cycle: cycle, Extension: "txt", MonitoredData: innodbStatusChan, Path: "mysql/engine-innodb"}
 }
 
-func monitorSlaveStatus(monitoringDB *sqlx.DB, cycle *data.Cycle, ch chan data.CycleData) {
+func monitorSlaveStatus(ctx context.Context, monitoringDB *sqlx.DB, cycle *data.Cycle, ch chan data.CycleData) {
 	logrus.Debug("fetching slave status")
 	defer logrus.Debug("finished fetching slave status")
 
-	slaveStatusChan, err := mysql.GetSlaveStatus(monitoringDB)
+	slaveStatusChan, err := mysql.GetSlaveStatus(ctx, monitoringDB)
 	if err != nil {
 		logrus.WithError(err).Error("could not get slave status")
 		return
@@ -422,11 +467,11 @@ func monitorSlaveStatus(monitoringDB *sqlx.DB, cycle *data.Cycle, ch chan data.C
 	ch <- data.CycleData{Cycle: cycle, Extension: "json", Path: "mysql/slave-status", MonitoredData: slaveStatusChan}
 }
 
-func monitorThreads(monitoringDB *sqlx.DB, cycle *data.Cycle, ch chan data.CycleData) {
+func monitorThreads(ctx context.Context, monitoringDB *sqlx.DB, cycle *data.Cycle, ch chan data.CycleData) {
 	logrus.Debug("fetching threads")
 	defer logrus.Debug("finished fetching threads")
 
-	threadsChan, err := mysql.GetThreads(monitoringDB)
+	threadsChan, err := mysql.GetThreads(ctx, monitoringDB)
 	if err != nil {
 		logrus.WithError(err).Error("could not get slave status")
 		return
@@ -554,7 +599,7 @@ func saveCycleToFile(db *data.DB, outputDir, path, extension string, cycle *data
 		return fmt.Errorf("could not determine how to save file with extension %s", extension)
 	}
 
-	absFilePath := fmt.Sprintf("%s/%s.%s.gz", filePath, cycle.RanAt.Format("2006-01-02T150405Z0700"), extension)
+	absFilePath := fmt.Sprintf("%s/%s.%s.gz", filePath, cycle.RanAt.Format(timeFormat), extension)
 
 	logrus.Debugf("saving to %q", absFilePath)
 

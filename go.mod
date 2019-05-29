@@ -16,6 +16,7 @@ require (
 	github.com/olekukonko/tablewriter v0.0.1
 	github.com/pkg/errors v0.8.1
 	github.com/pressly/goose v2.6.0+incompatible
+	github.com/prometheus/client_golang v0.9.3
 	github.com/satori/go.uuid v1.2.0
 	github.com/sirupsen/logrus v1.3.0
 	github.com/smartystreets/goconvey v0.0.0-20190306220146-200a235640ff // indirect

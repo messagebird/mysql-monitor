@@ -27,9 +27,36 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const timeFormat = "2006-01-02T150405Z0700"
+
+var (
+	cntCycles = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mysql_monitor_cycels_total",
+		Help: "The total number of cycles",
+	})
+	sumTimeToFetchMysql = promauto.NewSummaryVec(prometheus.SummaryOpts{
+		Name: "mysql_monitor_time_to_fetch_from_mysql_seconds",
+		Help: "The time it took to fetch the data from mysql in seconds",
+	},
+	[]string{"query_type"},
+	)
+	sumTimeToFetchSystem = promauto.NewSummaryVec(prometheus.SummaryOpts{
+		Name: "mysql_monitor_time_to_fetch_from_system_seconds",
+		Help: "The time it took to fetch the data from system in seconds",
+	},
+	[]string{"query_type"},
+	)
+	cntFetchDeadline = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mysql_monitor_ctx_fetch_deadline_exceeded_total",
+		Help: "The total number of times teh deadline has been exceeded to fetch logging data",
+	})
+)
 
 func GetMonitorCommandFlags() []cli.Flag {
 	return []cli.Flag{
@@ -84,6 +111,11 @@ func GetMonitorCommandFlags() []cli.Flag {
 			Name:  "api-port, p",
 			Usage: "On which port the api server should be exposed. This will only be available when the flag --not-in-sqlite is not passed.",
 			Value: "9090",
+		},
+		cli.StringFlag{
+			Name:  "metrics-port, mp",
+			Usage: "On which port the metrics (/metrics) server should be exposed.",
+			Value: "9100",
 		},
 	}
 }
@@ -190,6 +222,27 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgrou
 	ch := make(chan data.CycleData)
 
 	g.Go(func() error {
+		logrus.Info("started metrics http server")
+		r := chi.NewRouter()
+		r.Handle("/metrics", promhttp.Handler())
+
+		errCh := make(chan error)
+
+		go func() {
+			errCh <- errors.WithStack(http.ListenAndServe(fmt.Sprintf("0.0.0.0:%s", cliCtx.String("mp")), r))
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case err := <-errCh:
+				return errors.Wrap(err, "http metrics server stopped")
+			}
+		}
+	})
+
+	g.Go(func() error {
 		for {
 			select {
 			case <-innerCtx.Done():
@@ -223,6 +276,7 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgrou
 				cancel()
 				return nil
 			case start := <-ticker:
+				cntCycles.Inc()
 				cycles++
 
 				mysqlDone := make(chan bool, 1)
@@ -276,6 +330,9 @@ func fetchMysql(ctx context.Context, cliCtx *cli.Context, monitorDb *sqlx.DB, cy
 			innerWg.Add(1)
 			go func() {
 				defer innerWg.Done()
+				timer := prometheus.NewTimer(sumTimeToFetchMysql.WithLabelValues("mysql-process-list"))
+				defer timer.ObserveDuration()
+
 				monitorMysqlProcessList(ctx, monitorDb, cycle, ch)
 			}()
 		}
@@ -284,6 +341,9 @@ func fetchMysql(ctx context.Context, cliCtx *cli.Context, monitorDb *sqlx.DB, cy
 			innerWg.Add(1)
 			go func() {
 				defer innerWg.Done()
+				timer := prometheus.NewTimer(sumTimeToFetchMysql.WithLabelValues("innodb-status"))
+				defer timer.ObserveDuration()
+
 				monitorEngineINNODB(ctx, monitorDb, cycle, ch)
 			}()
 		}
@@ -292,6 +352,9 @@ func fetchMysql(ctx context.Context, cliCtx *cli.Context, monitorDb *sqlx.DB, cy
 			innerWg.Add(1)
 			go func() {
 				defer innerWg.Done()
+				timer := prometheus.NewTimer(sumTimeToFetchMysql.WithLabelValues("slave-status"))
+				defer timer.ObserveDuration()
+
 				monitorSlaveStatus(ctx, monitorDb, cycle, ch)
 			}()
 		}
@@ -300,6 +363,9 @@ func fetchMysql(ctx context.Context, cliCtx *cli.Context, monitorDb *sqlx.DB, cy
 			innerWg.Add(1)
 			go func() {
 				defer innerWg.Done()
+				timer := prometheus.NewTimer(sumTimeToFetchMysql.WithLabelValues("ps-threads"))
+				defer timer.ObserveDuration()
+
 				monitorThreads(ctx, monitorDb, cycle, ch)
 			}()
 		}
@@ -317,6 +383,9 @@ func fetchSystem(cliCtx *cli.Context, cycle *data.Cycle, allDone chan bool, syst
 		innerWg.Add(1)
 		go func() {
 			defer innerWg.Done()
+			timer := prometheus.NewTimer(sumTimeToFetchSystem.WithLabelValues("process-list"))
+			defer timer.ObserveDuration()
+
 			monitorUnixProcessList(cycle, ch)
 		}()
 	}
@@ -325,6 +394,9 @@ func fetchSystem(cliCtx *cli.Context, cycle *data.Cycle, allDone chan bool, syst
 		innerWg.Add(1)
 		go func() {
 			defer innerWg.Done()
+			timer := prometheus.NewTimer(sumTimeToFetchMysql.WithLabelValues("top"))
+			defer timer.ObserveDuration()
+
 			monitorUnixTop(cycle, ch)
 		}()
 	}
@@ -342,6 +414,7 @@ func waitForFetchToFinish(ctx context.Context, mysqlDone chan bool, systemDone c
 				continue
 			}
 			logrus.WithError(ctx.Err()).Warnf("partial data stored, one of the systems that is being logged did not finish. It took longer then %s to fetch the data.", timeout)
+			cntFetchDeadline.Inc()
 			return
 		case <-mysqlDone:
 			logrus.Info("mysql logs fetched")

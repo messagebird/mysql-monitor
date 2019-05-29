@@ -83,6 +83,7 @@ What this api can do:
 |--output-dir|The path where the sqlite db/log files containing the data should be saved (default: "./mysql-monitor-db.sqlite")|
 |--exclude-\<type>|Exclude \<type> from being logged.|
 |--not-in-sqlite|Use logging to disk instead of sqlite see [Saving .gz's to disk](#saving-.gz's-to-disk)|
+|--metrics-port|On which port should prometheus metrics be exposed|
 
 ## Get command (g)
 This command is only needed if using the "save in sqlite" mode.

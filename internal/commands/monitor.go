@@ -54,7 +54,7 @@ var (
 	)
 	cntFetchDeadline = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "mysql_monitor_ctx_fetch_deadline_exceeded_total",
-		Help: "The total number of times teh deadline has been exceeded to fetch logging data",
+		Help: "The total number of times the deadline has been exceeded to fetch logging data",
 	})
 )
 

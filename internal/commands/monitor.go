@@ -399,7 +399,7 @@ func fetchSystem(cliCtx *cli.Context, cycle *data.Cycle, allDone chan bool, syst
 		innerWg.Add(1)
 		go func() {
 			defer innerWg.Done()
-			timer := prometheus.NewTimer(sumTimeToFetchMysql.WithLabelValues("top"))
+			timer := prometheus.NewTimer(sumTimeToFetchSystem.WithLabelValues("top"))
 			defer timer.ObserveDuration()
 
 			monitorUnixTop(cycle, ch)

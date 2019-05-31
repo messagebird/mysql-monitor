@@ -3,6 +3,8 @@
 package logging
 
 import (
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/sirupsen/logrus"
 	"runtime"
 )
@@ -25,3 +27,22 @@ exiting
 )
 */
 type TraceType int
+
+var (
+	cntError = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "mysql_monitor_error_count_total",
+		Help: "The amount of generic errors that happened",
+	})
+)
+
+type PrometheusHook struct {
+}
+
+func (*PrometheusHook) Levels() []logrus.Level {
+	return []logrus.Level{logrus.ErrorLevel}
+}
+
+func (*PrometheusHook) Fire(*logrus.Entry) error {
+	cntError.Inc()
+	return nil
+}

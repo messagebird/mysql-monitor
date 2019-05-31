@@ -36,9 +36,9 @@ import (
 const timeFormat = "2006-01-02T150405Z0700"
 
 var (
-	cntCycles = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "mysql_monitor_cycels_total",
-		Help: "The total number of cycles",
+	sumCycle = promauto.NewSummary(prometheus.SummaryOpts{
+		Name: "mysql_monitor_cycels_seconds",
+		Help: "The total number of cycles and how long it takes to complete a cycle",
 	})
 	sumTimeToFetchMysql = promauto.NewSummaryVec(prometheus.SummaryOpts{
 		Name: "mysql_monitor_time_to_fetch_from_mysql_seconds",
@@ -118,6 +118,10 @@ func GetMonitorCommandFlags() []cli.Flag {
 			Value: "9100",
 		},
 	}
+}
+
+func init() {
+	logrus.AddHook(&logging.PrometheusHook{})
 }
 
 func Monitor(cliCtx *cli.Context) {
@@ -276,7 +280,7 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgrou
 				cancel()
 				return nil
 			case start := <-ticker:
-				cntCycles.Inc()
+				timer := prometheus.NewTimer(sumCycle)
 				cycles++
 
 				mysqlDone := make(chan bool, 1)
@@ -305,6 +309,7 @@ func runMonitor(cliCtx *cli.Context, monitorDb *sqlx.DB, db *data.DB, g *errgrou
 
 				waitForFetchToFinish(ctx, mysqlDone, systemDone, allDone, timeout)
 
+				timer.ObserveDuration()
 				timeTook := time.Since(start)
 
 				logrus.Infof("cycle %d, timestamp: %s", cycles, cycle.RanAt.Format(timeFormat))

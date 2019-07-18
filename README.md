@@ -105,3 +105,13 @@ host=127.0.0.1
 ```
 
 Connecting via socket is also supported.
+
+# Tips and Tricks
+
+If you're using JQ and you want to convert the JSON to CSV to be able to import it in something like excel/numbers:
+
+```
+$ jq --version
+jq-1.5-1-a5b5cbe
+$ jq -r '(map(keys) | add | unique) as $cols | map(. as $row | $cols | map($row[.])) as $rows | $cols, $rows[] | @csv
+```
